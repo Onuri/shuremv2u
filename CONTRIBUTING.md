@@ -21,8 +21,14 @@ cargo build
 All of the following must pass clean before any commit:
 
 ```bash
-cargo clippy --features probe -- -D warnings && cargo fmt --check && cargo test
+cargo clippy --features probe -- -D warnings && cargo build --all-targets --features probe \
+  && cargo fmt --check && cargo test
 ```
+
+CI runs the same commands on Linux and macOS, plus a check on the minimum Rust version
+(1.88). If you change dependencies, also run `cargo deny check` (install it with
+`cargo install --locked cargo-deny`); it enforces the licence and source rules in
+`deny.toml`.
 
 The `--features probe` flag is required: `shurectl-probe` is feature-gated and would
 otherwise be skipped by clippy entirely.

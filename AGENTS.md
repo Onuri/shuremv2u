@@ -29,6 +29,7 @@ cargo clippy --features probe -- -D warnings && cargo build --all-targets --feat
   compiles. Read the `cargo test` output for warnings; don't just grep for `test result`.
 - Clippy isn't run with `--all-targets` yet because of pre-existing
   `field_reassign_with_default` warnings in `app.rs` tests. Fold them into struct literals before tightening.
+- Dependency changes: run `cargo deny check` (licences and sources, `deny.toml`).
 - CI runs jscpd (budget 5% in `.github/linters/.jscpd.json`, ~4.3% actual). Check with
   `npx jscpd -c .github/linters/.jscpd.json .`. Fix duplication by extending a shared helper;
   don't raise the threshold.
@@ -175,6 +176,7 @@ Shared across all models unless the hardware makes it impossible:
 | --- | --- |
 | New protocol command | Roundtrip test in `protocol.rs` first |
 | Packet encoding changes | Test CRC correctness and 64-byte length invariant |
+| New reply decoder or SET constructor | Add it to the property tests in `protocol.rs` (`mod proptests`) |
 | State decode changes | Test `apply_response()` with hand-crafted response buffers |
 | Focus/navigation changes | Manual test in `--demo` for all six models |
 | `main()` / CLI args | No tests |

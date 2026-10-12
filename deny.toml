@@ -1,0 +1,45 @@
+# cargo-deny configuration. Run locally with `cargo deny check`; CI runs it in
+# .github/workflows/audit.yml. Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Check every platform the crate targets, not just the host.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+all-features = true
+
+[advisories]
+# Unmaintained crates are reported, but only direct dependencies fail the check.
+unmaintained = "workspace"
+yanked = "deny"
+
+[licenses]
+# Every licence here is compatible with distributing shurectl under GPL-3.0-only.
+# Keep the list to licences the dependency tree actually uses; cargo-deny warns
+# about unused entries.
+allow = [
+    "GPL-3.0-only",
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "Zlib",
+    "BSL-1.0",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Duplicate versions are common in the ratatui/cpal trees; report, don't fail.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
