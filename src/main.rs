@@ -148,9 +148,9 @@ fn main() -> Result<()> {
                     .unwrap_or(d.serial);
                 println!(
                     "  {} | {} | S/N: {}",
-                    d.path,
+                    printable(&d.path),
                     d.model.display_name(),
-                    serial
+                    printable(&serial)
                 );
             }
         }
@@ -305,8 +305,18 @@ fn cmd_preset(slot_number: usize, device_path: Option<&str>) -> Result<()> {
         .state;
     apply_preset_to_state(&slot, &mut state, model);
     apply_preset_to_device(&Some(dev), &state, model).context("Could not load preset")?;
-    println!("Loaded \"{}\".", slot.name);
+    println!("Loaded \"{}\".", printable(&slot.name));
     Ok(())
+}
+
+/// Replace control characters with `?` before printing outside the TUI. The
+/// serial comes from the device and the preset name from a file that may have
+/// been shared, so either could carry terminal escape sequences (OSC 52
+/// clipboard writes, hyperlinks). ratatui already drops these inside the TUI.
+fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
 }
 
 fn open_cli_device(device_path: Option<&str>) -> Result<ShureDevice> {
@@ -1284,6 +1294,13 @@ fn apply_preset_to_device(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn printable_replaces_control_characters() {
+        assert_eq!(printable("3DI21779784"), "3DI21779784");
+        assert_eq!(printable("Podcast — warm"), "Podcast — warm");
+        assert_eq!(printable("a\x1b]52;c;eA==\x07b\n"), "a?]52;c;eA==?b?");
+    }
 
     #[test]
     fn cli_parses_mute_status_and_preset_slot() {
