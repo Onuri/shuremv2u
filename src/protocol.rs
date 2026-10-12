@@ -5748,3 +5748,189 @@ mod tests {
         }
     }
 }
+
+/// Property tests: device replies are untrusted input, so decoding arbitrary
+/// bytes or text must never panic, and every encoded packet must keep the
+/// 64-byte length and a valid CRC whatever values it is given.
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    const MODELS: [DeviceModel; 6] = [
+        DeviceModel::Mvx2u,
+        DeviceModel::Mvx2uGen2,
+        DeviceModel::Mv6,
+        DeviceModel::Mv6Gen2,
+        DeviceModel::Mv7,
+        DeviceModel::Mv7Plus,
+    ];
+
+    /// Every address `apply_response()` decodes, EQ bands included.
+    fn known_feats() -> Vec<[u8; 2]> {
+        let mut feats = vec![
+            FEAT_LOCK,
+            FEAT_GAIN,
+            FEAT_MUTE,
+            FEAT_HPF,
+            FEAT_LIMITER,
+            FEAT_COMP,
+            FEAT_PHANTOM,
+            FEAT_AUTO,
+            FEAT_MIX,
+            FEAT_AUTO_POSITION,
+            FEAT_AUTO_TONE,
+            FEAT_AUTO_GAIN,
+            FEAT_EQ,
+            FEAT_DEVICE_NAME,
+            FEAT_FIRMWARE,
+            FEAT_SERIAL,
+            MV6_FEAT_DENOISER,
+            MV6_FEAT_POPPER_STOPPER,
+            MV6_FEAT_MUTE_BTN_DISABLE_RESP,
+            MV6_FEAT_TONE,
+            MV6_FEAT_GAIN_LOCK,
+            MV6_GEN2_FEAT_ADAPTATION_RATE,
+            MV6_GEN2_FEAT_DENOISER_LEVEL,
+            MV6_GEN2_FEAT_TONE_MODE,
+            MV7_FEAT_REVERB_OUTPUT,
+            MV7_FEAT_REVERB_TYPE,
+            MV7_FEAT_REVERB_INTENSITY,
+            MV7_FEAT_REVERB_MONITOR,
+            MV7_FEAT_LED_BRIGHTNESS_RESP,
+            MV7_FEAT_LED_LIVE_THEME_RESP,
+            MV7_FEAT_LED_LIVE_EDGE_RESP,
+            MV7_FEAT_LED_LIVE_MIDDLE_RESP,
+            MV7_FEAT_LED_LIVE_INTERIOR_RESP,
+            MV7_FEAT_LED_SOLID_COLOR_RESP,
+            MV7_FEAT_LED_PULSING_COLOR_RESP,
+            MV7_FEAT_LED_BEHAVIOR_RESP,
+            MV7_FEAT_LED_SOLID_THEME_RESP,
+            MV7_FEAT_LED_PULSING_THEME_RESP,
+        ];
+        for (enable, gain) in EQ_BAND_ADDRS {
+            feats.push(enable);
+            feats.push(gain);
+        }
+        feats
+    }
+
+    /// The CRC stored in a built packet matches the bytes it covers.
+    fn assert_well_formed(pkt: &[u8]) {
+        assert_eq!(pkt.len(), PACKET_SIZE);
+        let contents_end = pkt[1] as usize;
+        let stored = u16::from_be_bytes([pkt[contents_end], pkt[contents_end + 1]]);
+        assert_eq!(crc16_ansi(&pkt[2..contents_end]), stored);
+    }
+
+    /// A reply frame with the given value, as the device would send it.
+    fn reply_packet(seq: u8, prefix: u8, feat: [u8; 2], value: &[u8]) -> Vec<u8> {
+        let mut payload = vec![prefix, feat[0], feat[1]];
+        payload.extend_from_slice(value);
+        build_packet(seq, &RES_GET_FEAT, &payload)
+    }
+
+    proptest! {
+        #[test]
+        fn parse_response_never_panics(buf in prop::collection::vec(any::<u8>(), 0..80)) {
+            let _ = parse_response(&buf);
+        }
+
+        #[test]
+        fn parse_response_never_panics_on_valid_framing(
+            total_len in any::<u8>(),
+            tail in prop::collection::vec(any::<u8>(), 0..62),
+        ) {
+            // Correct header magic so parsing gets past the first checks.
+            let mut buf = vec![REPORT_ID, total_len, HEADER_MAGIC[0], HEADER_MAGIC[1]];
+            buf.extend_from_slice(&tail);
+            let _ = parse_response(&buf);
+        }
+
+        #[test]
+        fn reply_roundtrips_through_parse_response(
+            seq in any::<u8>(),
+            prefix in any::<u8>(),
+            feat in any::<[u8; 2]>(),
+            value in prop::collection::vec(any::<u8>(), 0..=46),
+        ) {
+            let pkt = reply_packet(seq, prefix, feat, &value);
+            assert_well_formed(&pkt);
+            let reply = parse_response(&pkt).expect("well-formed reply must parse");
+            prop_assert_eq!(reply, Reply { prefix, feat, value });
+        }
+
+        #[test]
+        fn apply_reply_never_panics(
+            prefix in any::<u8>(),
+            feat in any::<[u8; 2]>(),
+            value in prop::collection::vec(any::<u8>(), 0..=46),
+        ) {
+            let mut state = DeviceState::default();
+            let _ = apply_reply(&Reply { prefix, feat, value }, &mut state);
+        }
+
+        #[test]
+        fn known_features_never_panic_on_any_value(
+            feat in prop::sample::select(known_feats()),
+            value in prop::collection::vec(any::<u8>(), 0..=46),
+        ) {
+            // Arbitrary feature addresses rarely hit a decoder; aim at real ones.
+            let mut state = DeviceState::default();
+            let _ = apply_response(feat, &value, &mut state);
+        }
+
+        #[test]
+        fn gain_roundtrips_through_set_and_decode(seq in any::<u8>(), gain_tenths in 0u16..=6553) {
+            let pkt = cmd_set_gain(seq, gain_tenths);
+            assert_well_formed(&pkt);
+            let contents_end = pkt[1] as usize;
+            let mut state = DeviceState::default();
+            prop_assert!(apply_response(FEAT_GAIN, &pkt[16..contents_end], &mut state));
+            prop_assert_eq!(state.gain_tenths, gain_tenths);
+        }
+
+        #[test]
+        fn set_packets_stay_well_formed_for_any_value(
+            seq in any::<u8>(),
+            gain_tenths in any::<u16>(),
+            byte in any::<u8>(),
+            band in 0usize..EQ_BAND_ADDRS.len(),
+            eq_gain in any::<i16>(),
+            model_index in 0usize..MODELS.len(),
+        ) {
+            assert_well_formed(&cmd_set_gain(seq, gain_tenths));
+            assert_well_formed(&cmd_set_mix(seq, byte));
+            assert_well_formed(&cmd_set_denoiser_level(seq, byte));
+            assert_well_formed(&cmd_set_eq_band_enable(seq, band, byte % 2 == 0));
+            assert_well_formed(&cmd_set_eq_band_gain(seq, band, eq_gain, MODELS[model_index]));
+            assert_well_formed(&cmd_set_mv7_led_solid_color(seq, byte, byte, byte));
+        }
+
+        #[test]
+        fn device_name_packets_stay_well_formed(seq in any::<u8>(), name in any::<String>()) {
+            assert_well_formed(&cmd_set_device_name(seq, &name));
+            assert_well_formed(&cmd_set_mv7_device_name(seq, &name));
+        }
+
+        #[test]
+        fn mv7_text_never_panics(text in any::<String>(), prefix in "[a-zA-Z]{0,10}") {
+            let mut state = DeviceState::default();
+            let _ = mv7_text::find_reply(&text, &prefix);
+            for line in text.lines() {
+                let _ = mv7_text::apply_reply(line, &mut state);
+            }
+        }
+
+        #[test]
+        fn mv7_text_never_panics_on_reply_shaped_lines(
+            name in "[a-zA-Z]{1,12}",
+            sep in "[= ]",
+            rest in "[ -~]{0,40}",
+        ) {
+            // Plain random strings almost never look like `name=value`; these do.
+            let mut state = DeviceState::default();
+            let _ = mv7_text::apply_reply(&format!("{name}{sep}{rest}"), &mut state);
+        }
+    }
+}

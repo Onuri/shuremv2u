@@ -12,6 +12,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The verification gate from AGENTS.md. Any failure blocks the merge.
   build:
     strategy:
       matrix:
@@ -24,7 +25,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
 
@@ -32,8 +33,35 @@ jobs:
       if: matrix.sys-deps != ''
       run: ${{ matrix.sys-deps }}
 
-    - name: Build
-      run: cargo build --verbose
+    - name: Install Rust toolchain
+      run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+
+    - name: Format
+      run: cargo fmt --check
+
+    - name: Clippy
+      run: cargo clippy --locked --features probe -- -D warnings
+
+    - name: Build all targets
+      run: cargo build --locked --all-targets --features probe
 
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --locked
+
+  # Cargo.toml promises rust-version 1.88. Check the shipped binaries, not the
+  # tests, so a newer dev-dependency can't break the promise for end users.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+
+    - name: Install Rust 1.88
+      run: rustup toolchain install 1.88 --profile minimal
+
+    - name: Check
+      run: cargo +1.88 check --locked --features probe
